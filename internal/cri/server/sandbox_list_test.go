@@ -17,13 +17,19 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
+	cni "github.com/containerd/go-cni"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 
+	criconfig "github.com/containerd/containerd/v2/internal/cri/config"
 	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
+	servertesting "github.com/containerd/containerd/v2/internal/cri/testing"
 )
 
 func TestToCRISandbox(t *testing.T) {
@@ -84,6 +90,138 @@ func TestToCRISandbox(t *testing.T) {
 			assert.Equal(t, expect, s, test.desc)
 		})
 	}
+}
+
+func TestListPodSandboxReportsCheckFailureAsNotReady(t *testing.T) {
+	plugin := servertesting.NewFakeCNIPlugin()
+	plugin.CheckErr = errors.New("pod IP is outside current enabled IPPools")
+	c := newTestCRIService()
+	c.netPlugin[defaultNetworkPlugin] = plugin
+
+	config := &runtime.PodSandboxConfig{
+		Metadata: &runtime.PodSandboxMetadata{
+			Name:      "test-name",
+			Uid:       "test-uid",
+			Namespace: "test-ns",
+			Attempt:   1,
+		},
+		Linux: &runtime.LinuxPodSandboxConfig{
+			SecurityContext: &runtime.LinuxSandboxSecurityContext{
+				NamespaceOptions: &runtime.NamespaceOption{
+					Network: runtime.NamespaceMode_POD,
+				},
+			},
+		},
+	}
+	sb := sandboxstore.NewSandbox(
+		sandboxstore.Metadata{
+			ID:        "check-fails",
+			Name:      "test-name",
+			Config:    config,
+			NetNSPath: "test-netns",
+			CNIResult: &cni.Result{},
+		},
+		sandboxstore.Status{
+			CreatedAt: time.Now(),
+			State:     sandboxstore.StateReady,
+		},
+	)
+	require.NoError(t, c.sandboxStore.Add(sb))
+
+	resp, err := c.ListPodSandbox(context.Background(), &runtime.ListPodSandboxRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.Items, 1)
+	assert.Equal(t, runtime.PodSandboxState_SANDBOX_NOTREADY, resp.Items[0].State)
+	assert.Equal(t, "check-fails", plugin.CheckID)
+}
+
+func TestListPodSandboxDoesNotRequireUnsupportedCheck(t *testing.T) {
+	plugin := servertesting.NewFakeCNIPlugin()
+	plugin.CheckErr = errors.New(`configuration version "0.3.1" does not support the CHECK command`)
+	c := newTestCRIService()
+	c.netPlugin[defaultNetworkPlugin] = plugin
+
+	config := &runtime.PodSandboxConfig{
+		Metadata: &runtime.PodSandboxMetadata{
+			Name:      "test-name",
+			Uid:       "test-uid",
+			Namespace: "test-ns",
+			Attempt:   1,
+		},
+		Linux: &runtime.LinuxPodSandboxConfig{
+			SecurityContext: &runtime.LinuxSandboxSecurityContext{
+				NamespaceOptions: &runtime.NamespaceOption{
+					Network: runtime.NamespaceMode_POD,
+				},
+			},
+		},
+	}
+	sb := sandboxstore.NewSandbox(
+		sandboxstore.Metadata{
+			ID:        "unsupported-check",
+			Name:      "test-name",
+			Config:    config,
+			NetNSPath: "test-netns",
+			CNIResult: &cni.Result{},
+		},
+		sandboxstore.Status{
+			CreatedAt: time.Now(),
+			State:     sandboxstore.StateReady,
+		},
+	)
+	require.NoError(t, c.sandboxStore.Add(sb))
+
+	resp, err := c.ListPodSandbox(context.Background(), &runtime.ListPodSandboxRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.Items, 1)
+	assert.Equal(t, runtime.PodSandboxState_SANDBOX_READY, resp.Items[0].State)
+	assert.Equal(t, "unsupported-check", plugin.CheckID)
+}
+
+func TestListPodSandboxCanDisableCheck(t *testing.T) {
+	plugin := servertesting.NewFakeCNIPlugin()
+	plugin.CheckErr = errors.New("pod IP is outside current enabled IPPools")
+	c := newTestCRIService()
+	c.config.CniConfig = criconfig.CniConfig{
+		NetworkPluginDisableCheckPodStatus: true,
+	}
+	c.netPlugin[defaultNetworkPlugin] = plugin
+
+	config := &runtime.PodSandboxConfig{
+		Metadata: &runtime.PodSandboxMetadata{
+			Name:      "test-name",
+			Uid:       "test-uid",
+			Namespace: "test-ns",
+			Attempt:   1,
+		},
+		Linux: &runtime.LinuxPodSandboxConfig{
+			SecurityContext: &runtime.LinuxSandboxSecurityContext{
+				NamespaceOptions: &runtime.NamespaceOption{
+					Network: runtime.NamespaceMode_POD,
+				},
+			},
+		},
+	}
+	sb := sandboxstore.NewSandbox(
+		sandboxstore.Metadata{
+			ID:        "disabled-check",
+			Name:      "test-name",
+			Config:    config,
+			NetNSPath: "test-netns",
+			CNIResult: &cni.Result{},
+		},
+		sandboxstore.Status{
+			CreatedAt: time.Now(),
+			State:     sandboxstore.StateReady,
+		},
+	)
+	require.NoError(t, c.sandboxStore.Add(sb))
+
+	resp, err := c.ListPodSandbox(context.Background(), &runtime.ListPodSandboxRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.Items, 1)
+	assert.Equal(t, runtime.PodSandboxState_SANDBOX_READY, resp.Items[0].State)
+	assert.Empty(t, plugin.CheckID)
 }
 
 func TestFilterSandboxes(t *testing.T) {

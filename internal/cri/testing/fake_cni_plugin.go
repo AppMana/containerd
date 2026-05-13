@@ -26,6 +26,9 @@ import (
 type FakeCNIPlugin struct {
 	StatusErr error
 	LoadErr   error
+	CheckErr  error
+	CheckID   string
+	CheckPath string
 }
 
 // NewFakeCNIPlugin create a FakeCNIPlugin.
@@ -50,7 +53,9 @@ func (f *FakeCNIPlugin) Remove(ctx context.Context, id, path string, opts ...cni
 
 // Check the network of PodSandbox.
 func (f *FakeCNIPlugin) Check(ctx context.Context, id, path string, opts ...cni.NamespaceOpts) error {
-	return nil
+	f.CheckID = id
+	f.CheckPath = path
+	return f.CheckErr
 }
 
 // Status get the status of the plugin.

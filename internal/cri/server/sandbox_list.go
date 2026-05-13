@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/containerd/log"
 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 
 	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
@@ -32,9 +33,16 @@ func (c *criService) ListPodSandbox(ctx context.Context, r *runtime.ListPodSandb
 	sandboxesInStore := c.sandboxStore.List()
 	var sandboxes []*runtime.PodSandbox
 	for _, sandboxInStore := range sandboxesInStore {
+		status := sandboxInStore.Status.Get()
+		if status.State == sandboxstore.StateReady {
+			if err := c.checkPodSandboxNetwork(ctx, sandboxInStore); err != nil {
+				log.G(ctx).WithError(err).Warnf("CNI CHECK failed for sandbox %q while listing sandboxes, reporting sandbox not ready", sandboxInStore.ID)
+				status.State = sandboxstore.StateNotReady
+			}
+		}
 		sandboxes = append(sandboxes, toCRISandbox(
 			sandboxInStore.Metadata,
-			sandboxInStore.Status.Get(),
+			status,
 		))
 	}
 

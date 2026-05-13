@@ -314,6 +314,7 @@ version = 3
       conf_template = ''
       ip_pref = ''
       use_internal_loopback = false
+      disable_check_pod_status = false
 
   [plugins.'io.containerd.grpc.v1.cri']
     disable_tcp_service = true
@@ -672,6 +673,12 @@ version = 2
     ip_pref = "ipv4"
     # use_internal_loopback specifies if we use the CNI loopback plugin or internal mechanism to set lo to up
     use_internal_loopback = false
+
+    # disable_check_pod_status disables CNI CHECK during PodSandboxStatus.
+    # By default, containerd uses CNI CHECK to mark an otherwise ready sandbox
+    # as not ready when a plugin reports stale or invalid networking. Plugins
+    # or CNI config versions that do not support CHECK are ignored.
+    disable_check_pod_status = false
 
   # 'plugins."io.containerd.grpc.v1.cri".image_decryption' contains config related
   # to handling decryption of encrypted container images.
