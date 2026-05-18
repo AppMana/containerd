@@ -18,12 +18,16 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
 	"github.com/containerd/go-cni"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
+
+	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
 )
 
 func TestToCNIPortMappings(t *testing.T) {
@@ -125,6 +129,60 @@ func TestToCNIPortMappings(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			assert.Equal(t, test.cniPortMappings, toCNIPortMappings(test.criPortMappings))
 		})
+	}
+}
+
+func TestSandboxNameReservationReleasedAfterFailedRunWithCleanupError(t *testing.T) {
+	c := newTestCRIService()
+	config := sandboxRunTestConfig()
+	name := makeSandboxName(config.GetMetadata())
+	id := "failed-before-response"
+
+	require.NoError(t, c.sandboxNameIndex.Reserve(name, id))
+
+	retErr := errors.New("run pod sandbox failed")
+	cleanupErr := errors.New("network teardown timed out")
+	c.releaseSandboxNameOnFailedRun(id, retErr)
+	require.NotNil(t, cleanupErr)
+
+	require.NoError(t, c.sandboxNameIndex.Reserve(name, "retry-id"))
+}
+
+func TestReserveSandboxNameReclaimsMissingStaleReservation(t *testing.T) {
+	c := newTestCRIService()
+	name := makeSandboxName(sandboxRunTestConfig().GetMetadata())
+
+	require.NoError(t, c.sandboxNameIndex.Reserve(name, "stale-id"))
+	require.NoError(t, c.reserveSandboxName(context.Background(), name, "retry-id"))
+
+	require.NoError(t, c.sandboxNameIndex.Reserve("different-name", "stale-id"))
+}
+
+func TestReserveSandboxNameKeepsExistingSandboxReservation(t *testing.T) {
+	c := newTestCRIService()
+	config := sandboxRunTestConfig()
+	name := makeSandboxName(config.GetMetadata())
+	existingID := "existing-id"
+
+	require.NoError(t, c.sandboxNameIndex.Reserve(name, existingID))
+	require.NoError(t, c.sandboxStore.Add(sandboxstore.NewSandbox(
+		sandboxstore.Metadata{ID: existingID, Config: config},
+		sandboxstore.Status{State: sandboxstore.StateReady},
+	)))
+
+	err := c.reserveSandboxName(context.Background(), name, "retry-id")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "reserved")
+}
+
+func sandboxRunTestConfig() *runtime.PodSandboxConfig {
+	return &runtime.PodSandboxConfig{
+		Metadata: &runtime.PodSandboxMetadata{
+			Name:      "test-pod",
+			Uid:       "test-uid",
+			Namespace: "test-ns",
+			Attempt:   0,
+		},
 	}
 }
 
