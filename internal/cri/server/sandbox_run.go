@@ -82,15 +82,11 @@ func (c *criService) RunPodSandbox(ctx context.Context, r *runtime.RunPodSandbox
 
 	// Reserve the sandbox name to avoid concurrent `RunPodSandbox` request starting the
 	// same sandbox.
-	if err := c.sandboxNameIndex.Reserve(name, id); err != nil {
+	if err := c.reserveSandboxName(ctx, name, id); err != nil {
 		return nil, fmt.Errorf("failed to reserve sandbox name %q: %w", name, err)
 	}
 	defer func() {
-		// Release the name if the function returns with an error.
-		// When cleanupErr != nil, the name will be cleaned in sandbox_remove.
-		if retErr != nil && cleanupErr == nil {
-			c.sandboxNameIndex.ReleaseByName(name)
-		}
+		c.releaseSandboxNameOnFailedRun(id, retErr)
 	}()
 
 	leaseSvc := c.client.LeasesService()
@@ -435,6 +431,42 @@ func (c *criService) ensurePauseImageExists(ctx context.Context, config *runtime
 	}
 
 	return nil
+}
+
+func (c *criService) reserveSandboxName(ctx context.Context, name, id string) error {
+	err := c.sandboxNameIndex.Reserve(name, id)
+	if err == nil {
+		return nil
+	}
+
+	reservedID, ok := c.sandboxNameIndex.GetByName(name)
+	if !ok {
+		return err
+	}
+	if _, getErr := c.sandboxStore.Get(reservedID); !errdefs.IsNotFound(getErr) {
+		return err
+	}
+
+	log.G(ctx).WithError(err).WithFields(log.Fields{
+		"sandboxName":    name,
+		"staleSandboxID": reservedID,
+		"newSandboxID":   id,
+	}).Warn("Releasing stale sandbox name reservation for missing sandbox")
+	c.sandboxNameIndex.ReleaseByName(name)
+	return c.sandboxNameIndex.Reserve(name, id)
+}
+
+func (c *criService) releaseSandboxNameOnFailedRun(id string, retErr error) {
+	if retErr == nil {
+		return
+	}
+	// This must happen even when later cleanup was incomplete.  In that case we
+	// keep the failed sandbox in the store so it can be cleaned up later, but the
+	// CRI call still returns an error and kubelet never learns the generated
+	// sandbox ID.  Leaving the reservation behind makes every retry for the same
+	// pod attempt fail with "sandbox name is reserved for <id>" even though
+	// kubelet has no way to remove that hidden sandbox ID.
+	c.sandboxNameIndex.ReleaseByKey(id)
 }
 
 // getNetworkPlugin returns the network plugin to be used by the runtime class

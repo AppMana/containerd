@@ -19,14 +19,19 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	cni "github.com/containerd/go-cni"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 
+	criconfig "github.com/containerd/containerd/v2/internal/cri/config"
 	podsandboxtypes "github.com/containerd/containerd/v2/internal/cri/server/podsandbox/types"
 	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
+	servertesting "github.com/containerd/containerd/v2/internal/cri/testing"
 )
 
 func TestPodSandboxStatus(t *testing.T) {
@@ -223,6 +228,81 @@ func TestSetUpdatedResources(t *testing.T) {
 			// Verify original fields are preserved
 			if test.desc == "should update info with resources" {
 				assert.Equal(t, uint32(1234), info.Pid)
+			}
+		})
+	}
+}
+
+func TestCheckPodSandboxNetwork(t *testing.T) {
+	config := &runtime.PodSandboxConfig{
+		Metadata: &runtime.PodSandboxMetadata{
+			Name:      "test-name",
+			Uid:       "test-uid",
+			Namespace: "test-ns",
+			Attempt:   1,
+		},
+		Linux: &runtime.LinuxPodSandboxConfig{
+			SecurityContext: &runtime.LinuxSandboxSecurityContext{
+				NamespaceOptions: &runtime.NamespaceOption{
+					Network: runtime.NamespaceMode_POD,
+				},
+			},
+		},
+	}
+	baseSandbox := sandboxstore.Sandbox{
+		Metadata: sandboxstore.Metadata{
+			ID:        "test-id",
+			Config:    config,
+			NetNSPath: "test-netns",
+			CNIResult: &cni.Result{},
+		},
+	}
+
+	for _, test := range []struct {
+		desc        string
+		checkErr    error
+		disable     bool
+		expectError bool
+		expectCheck bool
+	}{
+		{
+			desc:        "implemented check failure is returned",
+			checkErr:    errors.New("pod IP is outside current enabled IPPools"),
+			expectError: true,
+			expectCheck: true,
+		},
+		{
+			desc:        "unsupported check is ignored",
+			checkErr:    errors.New(`configuration version "0.3.1" does not support the CHECK command`),
+			expectCheck: true,
+		},
+		{
+			desc:     "check can be disabled",
+			checkErr: errors.New("pod IP is outside current enabled IPPools"),
+			disable:  true,
+		},
+	} {
+		t.Run(test.desc, func(t *testing.T) {
+			plugin := servertesting.NewFakeCNIPlugin()
+			plugin.CheckErr = test.checkErr
+			c := newTestCRIService()
+			c.config.CniConfig = criconfig.CniConfig{
+				NetworkPluginDisableCheckPodStatus: test.disable,
+			}
+			c.netPlugin[defaultNetworkPlugin] = plugin
+
+			err := c.checkPodSandboxNetwork(context.Background(), baseSandbox)
+			if test.expectError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			if test.expectCheck {
+				assert.Equal(t, "test-id", plugin.CheckID)
+				assert.Equal(t, "test-netns", plugin.CheckPath)
+			} else {
+				assert.Empty(t, plugin.CheckID)
+				assert.Empty(t, plugin.CheckPath)
 			}
 		})
 	}

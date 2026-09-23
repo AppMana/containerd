@@ -20,8 +20,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/containerd/log"
 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 
 	podsandboxtypes "github.com/containerd/containerd/v2/internal/cri/server/podsandbox/types"
@@ -77,6 +79,12 @@ func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandbox
 	}
 	if err := setUpdatedResources(ctx, sandbox, info); err != nil {
 		return nil, err
+	}
+	if state == runtime.PodSandboxState_SANDBOX_READY.String() {
+		if err := c.checkPodSandboxNetwork(ctx, sandbox); err != nil {
+			log.G(ctx).WithError(err).Warnf("CNI CHECK failed for sandbox %q, reporting sandbox not ready", sandbox.ID)
+			state = runtime.PodSandboxState_SANDBOX_NOTREADY.String()
+		}
 	}
 
 	status := toCRISandboxStatus(sandbox.Metadata, state, createdAt, ip, additionalIPs)
@@ -139,6 +147,43 @@ func setUpdatedResources(ctx context.Context, sandbox sandboxstore.Sandbox, info
 	info["info"] = string(infoBytes)
 
 	return nil
+}
+
+func (c *criService) checkPodSandboxNetwork(ctx context.Context, sandbox sandboxstore.Sandbox) error {
+	if c.config.CniConfig.NetworkPluginDisableCheckPodStatus || hostNetwork(sandbox.Config) || sandbox.CNIResult == nil {
+		return nil
+	}
+	if sandbox.NetNS != nil {
+		if closed, err := sandbox.NetNS.Closed(); err != nil {
+			return fmt.Errorf("check network namespace closed: %w", err)
+		} else if closed {
+			return nil
+		}
+	}
+	netPlugin := c.getNetworkPlugin(sandbox.RuntimeHandler)
+	if netPlugin == nil {
+		return nil
+	}
+	opts, err := cniNamespaceOpts(sandbox.ID, sandbox.Config)
+	if err != nil {
+		return fmt.Errorf("get cni namespace options: %w", err)
+	}
+	err = netPlugin.Check(ctx, sandbox.ID, sandbox.NetNSPath, opts...)
+	if err == nil || isCNIPluginCheckUnsupported(err) {
+		return nil
+	}
+	return err
+}
+
+func isCNIPluginCheckUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "does not support the check command") ||
+		strings.Contains(msg, "unknown cni_command") ||
+		strings.Contains(msg, "unknown cni command") ||
+		strings.Contains(msg, "unsupported cni command")
 }
 
 // toCRISandboxStatus converts sandbox metadata into CRI pod sandbox status.
