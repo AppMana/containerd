@@ -198,6 +198,10 @@ type CniConfig struct {
 	IPPreference string `toml:"ip_pref" json:"ipPref"`
 	// UseInternalLoopback specifies if we use the CNI loopback plugin or internal mechanism to set lo to up
 	UseInternalLoopback bool `toml:"use_internal_loopback" json:"useInternalLoopback"`
+	// NetworkPluginDisableCheckPodStatus disables CNI CHECK during PodSandboxStatus.
+	// When enabled, CHECK failures mark an otherwise ready sandbox as not ready,
+	// while plugins or config versions that do not support CHECK are ignored.
+	NetworkPluginDisableCheckPodStatus bool `toml:"disable_check_pod_status" json:"disableCheckPodStatus"`
 }
 
 // Mirror contains the config related to the registry mirror

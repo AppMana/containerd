@@ -89,6 +89,15 @@ func (r *Registrar) Reserve(name, key string) error {
 	return nil
 }
 
+// GetByName returns the key reserved for the provided name, if one exists.
+func (r *Registrar) GetByName(name string) (string, bool) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	key, exists := r.nameToKey[name]
+	return key, exists
+}
+
 // ReleaseByName releases the reserved name<->key mapping by name.
 // Once released, the name and the key can be reserved again.
 func (r *Registrar) ReleaseByName(name string) {
