@@ -25,6 +25,7 @@ jobs:
   native-tests:
     needs: build
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
@@ -44,5 +45,6 @@ jobs:
           }
           & .\package\bin\containerd.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & .\cri-server.test.exe -test.v -test.run 'TestCheck|TestListPodSandbox.*Check|Test.*SandboxName|TestPodSandboxStatus' -test.timeout 5m
+          $testArgs = @('-test.v', '-test.run', 'TestCheck|TestListPodSandbox.*Check|Test.*SandboxName|TestPodSandboxStatus', '-test.timeout', '5m')
+          & .\cri-server.test.exe @testArgs
           exit $LASTEXITCODE

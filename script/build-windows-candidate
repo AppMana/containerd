@@ -28,9 +28,10 @@ go -C "$shim_source" build -mod=readonly -trimpath -o "$output/package/bin/conta
 go test -mod=vendor -c -o "$output/cri-server.test.exe" ./internal/cri/server
 archive="containerd-${version#v}-windows-amd64.tar.gz"
 tar -czf "$output/$archive" -C "$output/package" bin
+go version -m "$output/package/bin/containerd.exe" "$output/package/bin/containerd-shim-runhcs-v1.exe" > "$output/build-metadata.txt"
 (
   cd "$output"
   sha256sum "$archive" cri-server.test.exe package/bin/*.exe > SHA256SUMS
-  printf 'containerd=%s\nrevision=%s\nrunhcs=%s\nhcsshim_library=%s\ngo=%s\n' "$version" "$revision" "$shim_version" "$library_version" "$(go version)" > provenance.txt
+  printf 'containerd=%s\nrevision=%s\nrunhcs=%s\nhcsshim_library=%s\n' "$version" "$revision" "$shim_version" "$library_version" > provenance.txt
 )
 printf '%s\n' "$output/$archive"
