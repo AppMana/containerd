@@ -488,22 +488,24 @@ against total impact.
 The deprecated features are shown in the following table:
 
 | Component                                                                        | Deprecation release | Target release for removal            | Recommendation                           |
-|----------------------------------------------------------------------------------|---------------------|---------------------------------------|------------------------------------------|
-| Runtime V1 API and implementation (`io.containerd.runtime.v1.linux`)             | containerd v1.4     | containerd v2.0 ✅                    | Use `io.containerd.runc.v2`              |
-| Runc V1 implementation of Runtime V2 (`io.containerd.runc.v1`)                   | containerd v1.4     | containerd v2.0 ✅                    | Use `io.containerd.runc.v2`              |
-| Built-in `aufs` snapshotter                                                      | containerd v1.5     | containerd v2.0 ✅                    | Use `overlayfs` snapshotter              |
-| Container label `containerd.io/restart.logpath`                                  | containerd v1.5     | containerd v2.0 ✅                    | Use `containerd.io/restart.loguri` label |
-| `cri-containerd-*.tar.gz` release bundles                                        | containerd v1.6     | containerd v2.0 ✅                    | Use `containerd-*.tar.gz` bundles        |
-| Pulling Schema 1 images (`application/vnd.docker.distribution.manifest.v1+prettyjws`) | containerd v1.7     | containerd v2.1 (Disabled in v2.0) ✅ | Use Schema 2 or OCI images               |
-| CRI `v1alpha2`                                                                   | containerd v1.7     | containerd v2.0 ✅                    | Use CRI `v1`                             |
-| Legacy CRI implementation of podsandbox support                                  | containerd v2.0     | containerd v2.0 ✅                    |                                          |
-| Go-Plugin library (`*.so`) as containerd runtime plugin                          | containerd v2.0     | containerd v2.1 ✅                    | Use external plugins (proxy or binary)   |
-| NRI v0.1.0 plugin support                                                        | containerd v2.2     | containerd v2.3                       | Use the v010-adapter NRI plugin, or update v0.1.0 plugins to use the current NRI API |
-| cgroup v1 support                                                                | containerd v2.2     | (May 2029)                            | Use cgroup v2                           |
+|----------------------------------------------------------------------------------|---------------------|---------------------------------------|------------------------------------------------------------------------------------------------|
+| Runtime V1 API and implementation (`io.containerd.runtime.v1.linux`)             | containerd v1.4     | containerd v2.0 ✅                    | Use `io.containerd.runc.v2`                                                                    |
+| Runc V1 implementation of Runtime V2 (`io.containerd.runc.v1`)                   | containerd v1.4     | containerd v2.0 ✅                    | Use `io.containerd.runc.v2`                                                                    |
+| Built-in `aufs` snapshotter                                                      | containerd v1.5     | containerd v2.0 ✅                    | Use `overlayfs` snapshotter                                                                    |
+| Container label `containerd.io/restart.logpath`                                  | containerd v1.5     | containerd v2.0 ✅                    | Use `containerd.io/restart.loguri` label                                                       |
+| `cri-containerd-*.tar.gz` release bundles                                        | containerd v1.6     | containerd v2.0 ✅                    | Use `containerd-*.tar.gz` bundles                                                              |
+| Pulling Schema 1 images (`application/vnd.docker.distribution.manifest.v1+prettyjws`) | containerd v1.7     | containerd v2.1 (Disabled in v2.0) ✅ | Use Schema 2 or OCI images                                                                |
+| CRI `v1alpha2`                                                                   | containerd v1.7     | containerd v2.0 ✅                    | Use CRI `v1`                                                                                   |
+| Legacy CRI implementation of podsandbox support                                  | containerd v2.0     | containerd v2.0 ✅                    |                                                                                                |
+| Go-Plugin library (`*.so`) as containerd runtime plugin                          | containerd v2.0     | containerd v2.1 ✅                    | Use external plugins (proxy or binary)                                                         |
+| NRI v0.1.0 plugin support                                                        | containerd v2.2     | containerd v2.3                       | Use the v010-adapter NRI plugin, or update v0.1.0 plugins to use the current NRI API           |
+| cgroup v1 support                                                                | containerd v2.2     | (May 2029)                            | Use cgroup v2                                                                                  |
+| Restoring checkpoint data during CRI `CreateContainer`                           | containerd v2.3     | containerd v2.4                       | Follow [KEP-5823](https://github.com/kubernetes/enhancements/issues/5823) for a replacement `RestorePod` API |
 
 - Pulling Schema 1 images has been disabled in containerd v2.0, but it still can be enabled by setting an environment variable `CONTAINERD_ENABLE_DEPRECATED_PULL_SCHEMA_1_IMAGE=1`
   until containerd v2.1. `ctr` users have to specify `--local` too (e.g., `ctr images pull --local`). Users of CRI clients (such as Kubernetes and `crictl`) have to specify this environment variable on the containerd daemon (usually in the systemd unit).
 - The latest release in May 2029 may not necessarily support cgroup v1, but there will be at least one maintained branch with the support for cgroup v1.
+- Starting in containerd v2.3.4, restoring checkpoint data during CRI `CreateContainer` is disabled by default. If your workflow requires the deprecated restore behavior prior to containerd v2.4, set `enable_experimental_restore_via_create = true` in `[plugins."io.containerd.cri.v1.runtime"]`. Forensic checkpoint generation remains enabled by default via `enable_criu = true`.
 
 ### Deprecated config properties
 The deprecated properties in [`config.toml`](./docs/cri/config.md) are shown in the following table:
@@ -524,6 +526,7 @@ The deprecated properties in [`config.toml`](./docs/cri/config.md) are shown in 
 |`[plugins."io.containerd.cri.v1.runtime".cni]`                        | `bin_dir`                    | containerd v2.1     | containerd v2.4            | Use `bin_dirs`, which supports a list of directories |
 |`[plugins."io.containerd.internal.v1.tracing"]`                       | `service_name`, `sampling_ratio`   | containerd v1.6.29 | containerd v2.4       | Instead use [OTel environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/), e.g. OTEL_SERVICE_NAME, OTEL_TRACES_SAMPLER*  |
 |`[plugins."io.containerd.cri.v1.runtime"]`                            | `enable_cdi`                 | containerd v2.2     | containerd v2.4            | CDI support will always be enabled                   |
+|`[plugins."io.containerd.cri.v1.runtime"]`                            | `enable_experimental_restore_via_create` | containerd v2.3.4 | containerd v2.4    | Follow [KEP-5823](https://github.com/kubernetes/enhancements/issues/5823) for a replacement `RestorePod` API |
 
 
 > **Note**
@@ -581,3 +584,4 @@ more quickly.
 | [gRPC Shim](https://github.com/containerd/containerd/pull/8052)                        | containerd v1.7 | containerd v2.0          |
 | [CRI Runtime Specific Snapshotter](https://github.com/containerd/containerd/pull/6899) | containerd v1.7 | containerd v2.0          |
 | [CRI Support for User Namespaces](./docs/user-namespaces/README.md)                    | containerd v1.7 | containerd v2.0          |
+| [CRI Restore via CreateContainer](https://github.com/containerd/containerd/pull/10365) | containerd v2.1 | Deprecated (v2.3), removal in v2.4 (see [KEP-5823](https://github.com/kubernetes/enhancements/issues/5823)) |

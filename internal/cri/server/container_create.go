@@ -43,10 +43,11 @@ import (
 	crilabels "github.com/containerd/containerd/v2/internal/cri/labels"
 	customopts "github.com/containerd/containerd/v2/internal/cri/opts"
 	containerstore "github.com/containerd/containerd/v2/internal/cri/store/container"
-	"github.com/containerd/containerd/v2/internal/cri/store/sandbox"
+	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
 	"github.com/containerd/containerd/v2/internal/cri/util"
 	"github.com/containerd/containerd/v2/internal/registrar"
 	"github.com/containerd/containerd/v2/pkg/blockio"
+	"github.com/containerd/containerd/v2/pkg/deprecation"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/containerd/v2/pkg/tracing"
 )
@@ -76,6 +77,9 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
 		sandboxID  = cstatus.SandboxID
 		sandboxPid = cstatus.Pid
 	)
+	if sandbox.Status.Get().State != sandboxstore.StateReady {
+		return nil, fmt.Errorf("sandbox container %q is not running", sandboxID)
+	}
 	span.SetAttributes(
 		tracing.Attribute("sandbox.id", sandboxID),
 		tracing.Attribute("sandbox.pid", sandboxPid),
@@ -150,6 +154,17 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
 		// This might be a checkpoint image. Let's pass
 		// it to the checkpoint code.
 
+		if c.warningService != nil {
+			c.warningService.Emit(ctx, deprecation.CRICreateContainerCheckpointRestore)
+			if msg, ok := deprecation.Message(deprecation.CRICreateContainerCheckpointRestore); ok {
+				log.G(ctx).WithFields(log.Fields{
+					"podsandboxid":  sandboxID,
+					"containerid":   id,
+					"containername": name,
+				}).Warn(msg)
+			}
+		}
+
 		if sandboxConfig.GetMetadata() == nil {
 			return nil, fmt.Errorf("sandboxConfig must not be empty")
 		}
@@ -215,7 +230,7 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
 type createContainerRequest struct {
 	ctx                   context.Context
 	containerID           string
-	sandbox               *sandbox.Sandbox
+	sandbox               *sandboxstore.Sandbox
 	sandboxID             string
 	imageID               string
 	containerConfig       *runtime.ContainerConfig
@@ -774,7 +789,7 @@ func (c *criService) buildLinuxSpec(
 	// can override them.
 	env := append([]string{}, imageConfig.Env...)
 	for _, e := range config.GetEnvs() {
-		env = append(env, e.GetKey()+"="+e.GetValue())
+		env = append(env, e.GetKey()+"="+string(e.GetValue()))
 	}
 	specOpts = append(specOpts, oci.WithEnv(env))
 
@@ -1013,7 +1028,7 @@ func (c *criService) buildWindowsSpec(
 	// can override them.
 	env := append([]string{}, imageConfig.Env...)
 	for _, e := range config.GetEnvs() {
-		env = append(env, e.GetKey()+"="+e.GetValue())
+		env = append(env, e.GetKey()+"="+string(e.GetValue()))
 	}
 	specOpts = append(specOpts, oci.WithEnv(env))
 
@@ -1102,7 +1117,7 @@ func (c *criService) buildDarwinSpec(
 	// can override them.
 	env := append([]string{}, imageConfig.Env...)
 	for _, e := range config.GetEnvs() {
-		env = append(env, e.GetKey()+"="+e.GetValue())
+		env = append(env, e.GetKey()+"="+string(e.GetValue()))
 	}
 	specOpts = append(specOpts, oci.WithEnv(env))
 
