@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Build the same versioned package for native CI, the VM upgrade lab, and promotion.
+# Producing this artifact does not qualify or publish it.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+version=${1:?usage: build-windows-candidate vVERSION /absolute/new/output-directory}
+output=${2:?explicit new output directory required}
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-appmana\.post\.[0-9]+$ ]] || { echo 'Invalid fork release version' >&2; exit 2; }
+[[ "$output" == /* && ! -e "$output" ]] || { echo 'Output must be a new absolute directory' >&2; exit 2; }
+git diff --exit-code --quiet
+git diff --cached --exit-code --quiet
+revision=$(git rev-parse HEAD)
+library_version=$(go list -mod=vendor -m -f '{{.Version}}' github.com/Microsoft/hcsshim)
+# Upstream intentionally pins the standalone shim independently of its library.
+shim_version=$(<script/setup/runhcs-version)
+[[ "$shim_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || exit 2
+mkdir -p "$output/package/bin"
+export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
+flags="-X github.com/containerd/containerd/v2/version.Version=$version -X github.com/containerd/containerd/v2/version.Revision=$revision"
+for executable in containerd ctr; do
+  go build -mod=vendor -trimpath -ldflags "$flags" -o "$output/package/bin/$executable.exe" "./cmd/$executable"
+done
+# Vendoring includes only imported libraries, not the shim's main package.
+# Fetch the exact Go checksum-database-verified module, not a floating branch.
+go mod download -json "github.com/Microsoft/hcsshim@$shim_version" > "$output/hcsshim-module.json"
+shim_source=$(jq -er .Dir "$output/hcsshim-module.json")
+go -C "$shim_source" build -mod=readonly -trimpath -o "$output/package/bin/containerd-shim-runhcs-v1.exe" ./cmd/containerd-shim-runhcs-v1
+go test -mod=vendor -c -o "$output/cri-server.test.exe" ./internal/cri/server
+archive="containerd-${version#v}-windows-amd64.tar.gz"
+tar -czf "$output/$archive" -C "$output/package" bin
+(
+  cd "$output"
+  sha256sum "$archive" cri-server.test.exe package/bin/*.exe > SHA256SUMS
+  printf 'containerd=%s\nrevision=%s\nrunhcs=%s\nhcsshim_library=%s\ngo=%s\n' "$version" "$revision" "$shim_version" "$library_version" "$(go version)" > provenance.txt
+)
+printf '%s\n' "$output/$archive"

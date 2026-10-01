@@ -1,0 +1,48 @@
+name: AppMana Windows runtime candidate
+on:
+  push:
+    branches: [feature/check-integration-2.3.2]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: CHECK and sandbox lifecycle race tests
+        run: go test -race ./internal/cri/server ./internal/registrar -count=1 -timeout=10m
+      - name: Build pinned runtime, shim, and native tests
+        run: bash script/build-windows-candidate v2.3.5-appmana.post.1 "$RUNNER_TEMP/windows-candidate"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-runtime-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-candidate
+          if-no-files-found: error
+  native-tests:
+    needs: build
+    strategy:
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-runtime-${{ github.sha }}
+          path: candidate
+      - name: Verify artifact and run actual Windows CHECK tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location candidate
+          foreach ($line in Get-Content SHA256SUMS) {
+            $parts = $line -split '\s+', 2
+            if ((Get-FileHash $parts[1] -Algorithm SHA256).Hash.ToLowerInvariant() -ne $parts[0]) { throw "Digest mismatch: $($parts[1])" }
+          }
+          & .\package\bin\containerd.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\cri-server.test.exe -test.v -test.run 'TestCheck|TestListPodSandbox.*Check|Test.*SandboxName|TestPodSandboxStatus' -test.timeout 5m
+          exit $LASTEXITCODE
