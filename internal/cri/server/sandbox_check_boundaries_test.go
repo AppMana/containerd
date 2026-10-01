@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"errors"
+	goruntime "runtime"
 	"testing"
 	"time"
 
@@ -28,7 +29,12 @@ func TestCheckSandboxSkipBoundaries(t *testing.T) {
 			case "disabled":
 				c.config.CniConfig.NetworkPluginDisableCheckPodStatus = true
 			case "host network":
-				config.Linux.SecurityContext.NamespaceOptions.Network = runtime.NamespaceMode_NODE
+				if goruntime.GOOS == "windows" {
+					config.Linux = nil
+					config.Windows = &runtime.WindowsPodSandboxConfig{SecurityContext: &runtime.WindowsSandboxSecurityContext{HostProcess: true}}
+				} else {
+					config.Linux.SecurityContext.NamespaceOptions.Network = runtime.NamespaceMode_NODE
+				}
 			case "no result":
 				sb.CNIResult = nil
 			case "no plugin":
