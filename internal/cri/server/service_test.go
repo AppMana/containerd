@@ -18,6 +18,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"github.com/containerd/errdefs"
 	"github.com/containerd/go-cni"
@@ -154,7 +155,8 @@ func newTestCRIService(opts ...testOpt) *criService {
 		netPlugin: map[string]cni.CNI{
 			defaultNetworkPlugin: servertesting.NewFakeCNIPlugin(),
 		},
-		sandboxService: &fakeSandboxService{},
+		sandboxService:       &fakeSandboxService{},
+		sandboxNetworkChecks: newNetworkCheckCache(podSandboxNetworkCheckTTL, time.Now),
 	}
 	for _, opt := range opts {
 		opt(service)

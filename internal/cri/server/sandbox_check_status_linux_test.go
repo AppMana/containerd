@@ -59,3 +59,24 @@ func TestCheckPodSandboxStatusBoundary(t *testing.T) {
 		})
 	}
 }
+
+// PodSandboxStatus and ListPodSandbox share one cached CHECK verdict, so the
+// NOTREADY that PLEG observes on relist is the one SyncPod sees in status.
+func TestCheckFailureSharedByListAndStatus(t *testing.T) {
+	c := newTestCRIService()
+	plugin := newCountingCheckPlugin()
+	plugin.setErr(errors.New("pod IP is outside current enabled IPPools"))
+	c.netPlugin[defaultNetworkPlugin] = plugin
+	c.sandboxService = checkStatusService{&fakeSandboxService{}, "SANDBOX_READY"}
+	sb := sandboxstore.NewSandbox(sandboxstore.Metadata{ID: "broken", Name: "test", Config: &runtime.PodSandboxConfig{Metadata: &runtime.PodSandboxMetadata{Name: "pod", Namespace: "test", Uid: "uid"}}, NetNSPath: "/proc/self/ns/net", CNIResult: &cni.Result{}}, sandboxstore.Status{State: sandboxstore.StateReady, CreatedAt: time.Now()})
+	sb.NetNS = netns.LoadNetNS("/proc/self/ns/net")
+	require.NoError(t, c.sandboxStore.Add(sb))
+
+	for range 10 {
+		require.Equal(t, runtime.PodSandboxState_SANDBOX_NOTREADY, listStates(t, c)["broken"])
+		response, err := c.PodSandboxStatus(context.Background(), &runtime.PodSandboxStatusRequest{PodSandboxId: "broken"})
+		require.NoError(t, err)
+		require.Equal(t, runtime.PodSandboxState_SANDBOX_NOTREADY, response.Status.State)
+	}
+	require.Equal(t, 1, plugin.count("broken"))
+}

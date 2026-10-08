@@ -690,7 +690,9 @@ version = 2
     # disable_check_pod_status disables CNI CHECK during PodSandboxStatus.
     # By default, containerd uses CNI CHECK to mark an otherwise ready sandbox
     # as not ready when a plugin reports stale or invalid networking. Plugins
-    # or CNI config versions that do not support CHECK are ignored.
+    # or CNI config versions that do not support CHECK are ignored. CHECK runs
+    # at most once every 30 seconds per sandbox; ListPodSandbox and
+    # PodSandboxStatus report the latest result in between.
     disable_check_pod_status = false
 
   # 'plugins."io.containerd.grpc.v1.cri".image_decryption' contains config related

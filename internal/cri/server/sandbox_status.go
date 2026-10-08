@@ -168,11 +168,13 @@ func (c *criService) checkPodSandboxNetwork(ctx context.Context, sandbox sandbox
 	if err != nil {
 		return fmt.Errorf("get cni namespace options: %w", err)
 	}
-	err = netPlugin.Check(ctx, sandbox.ID, sandbox.NetNSPath, opts...)
-	if err == nil || isCNIPluginCheckUnsupported(err) {
-		return nil
-	}
-	return err
+	return c.sandboxNetworkChecks.check(ctx, sandbox.ID, func(ctx context.Context) error {
+		err := netPlugin.Check(ctx, sandbox.ID, sandbox.NetNSPath, opts...)
+		if err == nil || isCNIPluginCheckUnsupported(err) {
+			return nil
+		}
+		return err
+	})
 }
 
 func isCNIPluginCheckUnsupported(err error) bool {

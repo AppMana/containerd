@@ -61,12 +61,16 @@ func TestCheckUnsupportedBoundaries(t *testing.T) {
 
 func TestCheckListReadinessRecoveryAndFilters(t *testing.T) {
 	c := newTestCRIService()
+	clock := &fakeCheckClock{t: time.Now()}
+	c.sandboxNetworkChecks = newNetworkCheckCache(podSandboxNetworkCheckTTL, clock.now)
 	plugin := servertesting.NewFakeCNIPlugin()
 	c.netPlugin[defaultNetworkPlugin] = plugin
 	sb := sandboxstore.NewSandbox(sandboxstore.Metadata{ID: "sandbox", Name: "test", Config: &runtime.PodSandboxConfig{Metadata: &runtime.PodSandboxMetadata{Name: "pod", Namespace: "test", Uid: "uid"}}, NetNSPath: "netns", CNIResult: &cni.Result{}}, sandboxstore.Status{State: sandboxstore.StateReady, CreatedAt: time.Now()})
 	require.NoError(t, c.sandboxStore.Add(sb))
 	for _, failure := range []error{errors.New("stale IPv6"), nil} {
 		plugin.CheckErr = failure
+		// A new verdict is observed once the previous one expires.
+		clock.advance(podSandboxNetworkCheckTTL)
 		for _, state := range []runtime.PodSandboxState{runtime.PodSandboxState_SANDBOX_READY, runtime.PodSandboxState_SANDBOX_NOTREADY} {
 			response, err := c.ListPodSandbox(context.Background(), &runtime.ListPodSandboxRequest{Filter: &runtime.PodSandboxFilter{State: &runtime.PodSandboxStateValue{State: state}}})
 			require.NoError(t, err)

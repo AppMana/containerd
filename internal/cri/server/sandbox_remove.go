@@ -110,6 +110,7 @@ func (c *criService) RemovePodSandbox(ctx context.Context, r *runtime.RemovePodS
 	// 2) PodSandboxStatus and StopPodSandbox will return error.
 	// 3) On-going operations which have held the reference will not be affected.
 	c.sandboxStore.Delete(id)
+	c.sandboxNetworkChecks.forget(id)
 
 	if err := c.client.SandboxStore().Delete(ctx, id); err != nil {
 		if !errdefs.IsNotFound(err) {

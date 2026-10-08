@@ -143,6 +143,8 @@ type criService struct {
 	containerNameIndex *registrar.Registrar
 	// netPlugin is used to setup and teardown network when run/stop pod sandbox.
 	netPlugin map[string]cni.CNI
+	// sandboxNetworkChecks caches CNI CHECK verdicts per sandbox.
+	sandboxNetworkChecks *networkCheckCache
 	// client is an instance of the containerd client
 	client *containerd.Client
 	// streamServer is the streaming server serves container streaming request.
@@ -215,22 +217,23 @@ func NewCRIService(options *CRIServiceOptions) (CRIService, runtime.RuntimeServi
 	statsCollector := NewStatsCollector(config)
 
 	c := &criService{
-		RuntimeService:     options.RuntimeService,
-		ImageService:       options.ImageService,
-		config:             config,
-		client:             options.Client,
-		imageFSPaths:       options.ImageService.ImageFSPaths(),
-		os:                 osinterface.RealOS{},
-		sandboxStore:       sandboxstore.NewStore(labels, statsCollector),
-		containerStore:     containerstore.NewStore(labels, statsCollector),
-		sandboxNameIndex:   registrar.NewRegistrar(),
-		containerNameIndex: registrar.NewRegistrar(),
-		netPlugin:          make(map[string]cni.CNI),
-		sandboxService:     newCriSandboxService(&config, options.SandboxControllers),
-		runtimeHandlers:    make(map[string]*runtime.RuntimeHandler),
-		statsCollector:     statsCollector,
-		shimPath:           options.ShimPath,
-		warningService:     options.WarningService,
+		RuntimeService:       options.RuntimeService,
+		ImageService:         options.ImageService,
+		config:               config,
+		client:               options.Client,
+		imageFSPaths:         options.ImageService.ImageFSPaths(),
+		os:                   osinterface.RealOS{},
+		sandboxStore:         sandboxstore.NewStore(labels, statsCollector),
+		containerStore:       containerstore.NewStore(labels, statsCollector),
+		sandboxNameIndex:     registrar.NewRegistrar(),
+		containerNameIndex:   registrar.NewRegistrar(),
+		netPlugin:            make(map[string]cni.CNI),
+		sandboxNetworkChecks: newNetworkCheckCache(podSandboxNetworkCheckTTL, time.Now),
+		sandboxService:       newCriSandboxService(&config, options.SandboxControllers),
+		runtimeHandlers:      make(map[string]*runtime.RuntimeHandler),
+		statsCollector:       statsCollector,
+		shimPath:             options.ShimPath,
+		warningService:       options.WarningService,
 	}
 
 	// TODO: Make discard time configurable

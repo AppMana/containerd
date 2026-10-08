@@ -16,7 +16,7 @@ jobs:
       - name: CHECK and sandbox lifecycle race tests
         run: go test -race ./internal/cri/server ./internal/registrar -count=1 -timeout=10m
       - name: Build pinned runtime, shim, and native tests
-        run: bash script/build-windows-candidate v2.3.5-appmana.post.1 "$RUNNER_TEMP/windows-candidate"
+        run: bash script/build-windows-candidate v2.3.5-appmana.post.2 "$RUNNER_TEMP/windows-candidate"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-runtime-${{ github.sha }}
