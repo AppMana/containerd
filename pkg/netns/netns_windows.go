@@ -18,6 +18,8 @@ package netns
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/Microsoft/hcsshim/hcn"
 )
@@ -53,14 +55,86 @@ func LoadNetNS(path string) *NetNS {
 // Remove removes network namespace if it exists and not closed. Remove is idempotent,
 // meaning it might be invoked multiple times and provides consistent result.
 func (n *NetNS) Remove() error {
-	hcnNamespace, err := hcn.GetNamespaceByID(n.path)
+	return removeWindowsNamespace(n.path, realWindowsNamespaceRemoval{})
+}
+
+type realWindowsNamespaceRemoval struct{}
+
+func (realWindowsNamespaceRemoval) namespaceExists(namespaceID string) (bool, error) {
+	ns, err := hcn.GetNamespaceByID(namespaceID)
+	if err != nil {
+		if hcn.IsNotFoundError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if ns.Type == hcn.NamespaceTypeHostDefault || ns.Type == hcn.NamespaceTypeGuestDefault {
+		return false, fmt.Errorf("refusing to remove default HCN namespace %s (type %s)", namespaceID, ns.Type)
+	}
+	return true, nil
+}
+
+func (realWindowsNamespaceRemoval) namespaceEndpointIDs(namespaceID string) ([]string, error) {
+	ids, err := hcn.GetNamespaceEndpointIds(namespaceID)
+	if hcn.IsNotFoundError(err) {
+		return nil, nil
+	}
+	return ids, err
+}
+
+func (realWindowsNamespaceRemoval) endpointExists(endpointID string) (bool, error) {
+	_, err := hcn.GetEndpointByID(endpointID)
+	if err == nil {
+		return true, nil
+	}
+	if hcn.IsNotFoundError(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (realWindowsNamespaceRemoval) detachEndpoint(namespaceID, endpointID string) error {
+	if err := hcn.RemoveNamespaceEndpoint(namespaceID, endpointID); err != nil && !hcn.IsNotFoundError(err) {
+		return err
+	}
+	ids, err := hcn.GetNamespaceEndpointIds(namespaceID)
+	if hcn.IsNotFoundError(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if strings.EqualFold(id, endpointID) {
+			return fmt.Errorf("endpoint %s remains attached to HCN namespace %s after detach", endpointID, namespaceID)
+		}
+	}
+	return nil
+}
+
+func (realWindowsNamespaceRemoval) deleteEndpoint(endpointID string) error {
+	ep, err := hcn.GetEndpointByID(endpointID)
 	if err != nil {
 		if hcn.IsNotFoundError(err) {
 			return nil
 		}
 		return err
 	}
-	err = hcnNamespace.Delete()
+	if err := ep.Delete(); err != nil && !hcn.IsNotFoundError(err) {
+		return err
+	}
+	return nil
+}
+
+func (realWindowsNamespaceRemoval) deleteNamespace(namespaceID string) error {
+	ns, err := hcn.GetNamespaceByID(namespaceID)
+	if err != nil {
+		if hcn.IsNotFoundError(err) {
+			return nil
+		}
+		return err
+	}
+	err = ns.Delete()
 	if err == nil || hcn.IsNotFoundError(err) {
 		return nil
 	}
