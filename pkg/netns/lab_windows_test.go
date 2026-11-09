@@ -4,9 +4,11 @@ package netns
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Microsoft/hcsshim/hcn"
 )
@@ -80,4 +82,61 @@ func TestLabDetachMissingWindowsEndpoint(t *testing.T) {
 		}
 	}
 	t.Log("detached only the explicitly named absent endpoint; namespace removal left to the runtime")
+}
+
+// Reproduces a live leaked HCN endpoint remaining attached to a sandbox NetNS
+// (e.g. partial CNI ADD with CNIResult == nil followed by a failed CNI DEL) on
+// an isolated Private HCN network, and verifies LoadNetNS(ns.Id).Remove()
+// detaches & deletes the live endpoint so HcnDeleteNamespace succeeds instead
+// of failing with 0x803b0015.
+func TestLabNetNSRemoveDetachesLiveEndpoint(t *testing.T) {
+	if os.Getenv("LABCONTAINERS_PRIVATE_HCN_REPRO") != "1" {
+		t.Skip("requires an explicitly isolated Windows lab")
+	}
+	name := fmt.Sprintf("lc-netns-remove-%d", time.Now().UnixNano())
+	network, err := (&hcn.HostComputeNetwork{
+		Name: name, Type: hcn.Private, SchemaVersion: hcn.SchemaVersion{Major: 2},
+		Ipams: []hcn.Ipam{{Type: "Static", Subnets: []hcn.Subnet{{
+			IpAddressPrefix: "198.18.233.0/24",
+			Routes:          []hcn.Route{{DestinationPrefix: "0.0.0.0/0", NextHop: "198.18.233.1"}},
+		}}}},
+	}).Create()
+	if err != nil {
+		t.Fatal("create isolated private network:", err)
+	}
+	t.Cleanup(func() {
+		if _, err := hcn.GetNetworkByID(network.Id); !hcn.IsNotFoundError(err) {
+			_ = network.Delete()
+		}
+	})
+	ns, err := hcn.NewNamespace(hcn.NamespaceTypeHost).Create()
+	if err != nil {
+		t.Fatal("create isolated HCN namespace:", err)
+	}
+	t.Cleanup(func() {
+		if _, err := hcn.GetNamespaceByID(ns.Id); !hcn.IsNotFoundError(err) {
+			_ = ns.Delete()
+		}
+	})
+	ep, err := (&hcn.HostComputeEndpoint{
+		Name:               name + "_ep",
+		HostComputeNetwork: network.Id,
+		SchemaVersion:      hcn.SchemaVersion{Major: 2},
+		IpConfigurations:   []hcn.IpConfig{{IpAddress: "198.18.233.4", PrefixLength: 24}},
+	}).Create()
+	if err != nil {
+		t.Fatal("create isolated HCN endpoint:", err)
+	}
+	if err := ep.NamespaceAttach(ns.Id); err != nil {
+		t.Fatal("attach endpoint to HCN namespace:", err)
+	}
+	if err := LoadNetNS(ns.Id).Remove(); err != nil {
+		t.Fatalf("NetNS.Remove() failed with live attached endpoint: %v", err)
+	}
+	if _, err := hcn.GetEndpointByID(ep.Id); !hcn.IsNotFoundError(err) {
+		t.Fatalf("expected live leaked endpoint %s to be deleted, got err=%v", ep.Id, err)
+	}
+	if _, err := hcn.GetNamespaceByID(ns.Id); !hcn.IsNotFoundError(err) {
+		t.Fatalf("expected HCN namespace %s to be deleted, got err=%v", ns.Id, err)
+	}
 }
