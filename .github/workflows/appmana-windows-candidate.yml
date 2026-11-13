@@ -68,9 +68,46 @@ jobs:
           $testArgs = @('-test.v', '-test.run', 'TestCheck|TestListPodSandbox.*Check|Test.*SandboxName|TestPodSandboxStatus', '-test.timeout', '5m')
           & .\cri-server.test.exe @testArgs
           exit $LASTEXITCODE
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - name: Build with the upstream release Dockerfile
+        run: |
+          set -euo pipefail
+          # Same build as the upstream Release workflow: make release static-release
+          # in the release Dockerfile, with the fork version as RELEASE_VER.
+          docker buildx build --build-arg RELEASE_VER="$VERSION" --build-arg UBUNTU_VERSION=22.04 \
+            -f .github/workflows/release/Dockerfile --platform=linux/amd64 -o "$RUNNER_TEMP/linux-build" .
+          archive="containerd-${VERSION#v}-linux-amd64.tar.gz"
+          mkdir "$RUNNER_TEMP/linux-candidate"
+          cp "$RUNNER_TEMP/linux-build/$archive" "$RUNNER_TEMP/linux-build/$archive.sha256sum" "$RUNNER_TEMP/linux-candidate/"
+      - name: Verify the packaged binaries
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/linux-candidate"
+          archive="containerd-${VERSION#v}-linux-amd64.tar.gz"
+          sha256sum -c "$archive.sha256sum"
+          mkdir "$RUNNER_TEMP/linux-unpacked"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/linux-unpacked"
+          cd "$RUNNER_TEMP/linux-unpacked/bin"
+          test -x containerd -a -x ctr -a -x containerd-shim-runc-v2
+          reported=$(./containerd --version; ./ctr --version; ./containerd-shim-runc-v2 -v)
+          printf '%s\n' "$reported"
+          grep -F "containerd " <<<"$reported" | grep -qF "$VERSION $GITHUB_SHA"
+          grep -F "ctr " <<<"$reported" | grep -qF "$VERSION"
+          grep -F "Version:" <<<"$reported" | grep -qF "$VERSION"
+          grep -F "Revision:" <<<"$reported" | grep -qF "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-${{ github.sha }}
+          path: ${{ runner.temp }}/linux-candidate
+          if-no-files-found: error
   release:
     if: github.ref_type == 'tag'
-    needs: [build, native-tests]
+    needs: [build, native-tests, linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -80,14 +117,21 @@ jobs:
         with:
           name: windows-runtime-${{ github.sha }}
           path: ${{ runner.temp }}/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-runtime-${{ github.sha }}
+          path: ${{ runner.temp }}/linux
       - name: Publish the tested artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           windows="containerd-${VERSION#v}-windows-amd64.tar.gz"
+          linux="containerd-${VERSION#v}-linux-amd64.tar.gz"
           (cd "$RUNNER_TEMP/windows" && sha256sum -c SHA256SUMS && grep -qx "revision=$GITHUB_SHA" provenance.txt)
+          (cd "$RUNNER_TEMP/linux" && sha256sum -c "$linux.sha256sum")
           gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag --draft=false --prerelease=false \
             --title "AppMana containerd ${VERSION#v}" --notes-file "releases/$VERSION.md" \
             "$RUNNER_TEMP/windows/$windows" "$RUNNER_TEMP/windows/SHA256SUMS" \
-            "$RUNNER_TEMP/windows/provenance.txt" "$RUNNER_TEMP/windows/build-metadata.txt"
+            "$RUNNER_TEMP/windows/provenance.txt" "$RUNNER_TEMP/windows/build-metadata.txt" \
+            "$RUNNER_TEMP/linux/$linux" "$RUNNER_TEMP/linux/$linux.sha256sum"
