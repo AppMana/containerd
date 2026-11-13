@@ -1,12 +1,32 @@
-name: AppMana Windows runtime candidate
+name: AppMana runtime candidate and release
 on:
   push:
-    branches: [feature/check-integration-2.3.2]
+    branches: [appmana-v2.3.6]
+    tags: ['v*-appmana.post.*']
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  # The one place the fork release version is set. A tag build must carry this name.
+  VERSION: v2.3.6-appmana.post.1
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require the tag, the version and the release notes to agree
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-appmana\.post\.[0-9]+$ ]] || { echo "::error::Invalid fork release version $VERSION"; exit 1; }
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$VERSION" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not equal the workflow version $VERSION"
+            exit 1
+          fi
+          upstream=${VERSION%%-appmana.post.*}
+          grep -q "Version = \"${upstream#v}+unknown\"" version/version.go || { echo "::error::$VERSION is not based on the upstream version in version/version.go"; exit 1; }
+          test -s "releases/$VERSION.md" || { echo "::error::Missing release notes releases/$VERSION.md"; exit 1; }
   build:
+    needs: version
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -14,9 +34,9 @@ jobs:
         with:
           go-version-file: go.mod
       - name: CHECK and sandbox lifecycle race tests
-        run: go test -race ./internal/cri/server ./internal/registrar -count=1 -timeout=10m
+        run: go test -race ./internal/cri/server ./internal/registrar ./pkg/netns -count=1 -timeout=10m
       - name: Build pinned runtime, shim, and native tests
-        run: bash script/build-windows-candidate v2.3.5-appmana.post.2 "$RUNNER_TEMP/windows-candidate"
+        run: bash script/build-windows-candidate "$VERSION" "$RUNNER_TEMP/windows-candidate"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-runtime-${{ github.sha }}
@@ -48,3 +68,26 @@ jobs:
           $testArgs = @('-test.v', '-test.run', 'TestCheck|TestListPodSandbox.*Check|Test.*SandboxName|TestPodSandboxStatus', '-test.timeout', '5m')
           & .\cri-server.test.exe @testArgs
           exit $LASTEXITCODE
+  release:
+    if: github.ref_type == 'tag'
+    needs: [build, native-tests]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-runtime-${{ github.sha }}
+          path: ${{ runner.temp }}/windows
+      - name: Publish the tested artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          windows="containerd-${VERSION#v}-windows-amd64.tar.gz"
+          (cd "$RUNNER_TEMP/windows" && sha256sum -c SHA256SUMS && grep -qx "revision=$GITHUB_SHA" provenance.txt)
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag --draft=false --prerelease=false \
+            --title "AppMana containerd ${VERSION#v}" --notes-file "releases/$VERSION.md" \
+            "$RUNNER_TEMP/windows/$windows" "$RUNNER_TEMP/windows/SHA256SUMS" \
+            "$RUNNER_TEMP/windows/provenance.txt" "$RUNNER_TEMP/windows/build-metadata.txt"
